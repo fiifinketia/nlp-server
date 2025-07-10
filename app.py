@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import uuid as uuid_lib
 from datetime import datetime
+import shutil
 
 from config.models_config import DEFAULT_MODELS_CONFIG, ModelsConfig, TTSModelConfig
 from services.tts_service import TTSService
@@ -65,6 +66,31 @@ class ModelsResponse(BaseModel):
     models: List[ModelInfoResponse]
     total_models: int
     loaded_models: int
+
+# Storage API models
+class StorageFileInfo(BaseModel):
+    name: str
+    path: str
+    size: int
+    modified: str
+    is_file: bool
+    is_dir: bool
+
+class StorageListResponse(BaseModel):
+    files: List[StorageFileInfo]
+    total_files: int
+    total_size: int
+
+class StorageUploadResponse(BaseModel):
+    success: bool
+    filename: str
+    file_path: str
+    size: int
+    message: str
+
+class StorageDeleteResponse(BaseModel):
+    success: bool
+    message: str
 
 # --- MOS Evaluation Utilities and Endpoints (XLSX version) ---
 EVAL_TEXTS_XLSX = "eval_texts.xlsx"
@@ -367,6 +393,80 @@ async def get_models_config():
             for name, config in models_config.tts_models.items()
         }
     }
+
+# Storage API endpoints
+@app.get("/storage", response_model=StorageListResponse)
+async def list_storage_files(subdirectory: Optional[str] = None):
+    """List all files in the storage directory"""
+    try:
+        base_path = Path(STORAGE_DIR)
+        if subdirectory:
+            target_path = base_path / subdirectory
+            if not target_path.exists() or not target_path.is_dir():
+                raise HTTPException(status_code=404, detail=f"Subdirectory '{subdirectory}' not found")
+        else:
+            target_path = base_path
+        
+        if not target_path.exists():
+            return StorageListResponse(files=[], total_files=0, total_size=0)
+        
+        files = []
+        total_size = 0
+        
+        for item in target_path.iterdir():
+            try:
+                stat = item.stat()
+                file_info = StorageFileInfo(
+                    name=item.name,
+                    path=str(item.relative_to(base_path)),
+                    size=stat.st_size,
+                    modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    is_file=item.is_file(),
+                    is_dir=item.is_dir()
+                )
+                files.append(file_info)
+                if item.is_file():
+                    total_size += stat.st_size
+            except (OSError, PermissionError):
+                # Skip files we can't access
+                continue
+        
+        return StorageListResponse(
+            files=files,
+            total_files=len(files),
+            total_size=total_size
+        )
+    except Exception as e:
+        logger.error(f"Error listing storage files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list storage files: {str(e)}")
+
+@app.get("/storage/{file_path:path}")
+async def download_storage_file(file_path: str):
+    """Download a file from the storage directory"""
+    try:
+        # Ensure the file path is within the storage directory
+        full_path = Path(STORAGE_DIR) / file_path
+        storage_path = Path(STORAGE_DIR).resolve()
+        
+        if not full_path.resolve().is_relative_to(storage_path):
+            raise HTTPException(status_code=400, detail="Access denied: Path outside storage directory")
+        
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail=f"File '{file_path}' not found")
+        
+        if not full_path.is_file():
+            raise HTTPException(status_code=400, detail=f"'{file_path}' is not a file")
+        
+        return FileResponse(
+            str(full_path),
+            filename=full_path.name,
+            media_type="application/octet-stream"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading file {file_path}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
