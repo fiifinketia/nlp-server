@@ -66,7 +66,7 @@ DEFAULT_MODELS_CONFIG = ModelsConfig(
             length_scale=1.0,
         ),
         "ugtts_im_speaker_v4": TTSModelConfig(
-            name="ugtts_im_speaker",
+            name="ugtts_im_speaker_v4",
             model_type=ModelType.SINGLE_SPEAKER,
             model_path="models/ugtts-im-speaker-v4/model.pth",
             config_path="models/ugtts-im-speaker-v4/config.json",
@@ -75,7 +75,7 @@ DEFAULT_MODELS_CONFIG = ModelsConfig(
             length_scale=1.0,
         ),
         "ugtts_im_speaker_v3": TTSModelConfig(
-            name="ugtts_im_speaker",
+            name="ugtts_im_speaker_v3",
             model_type=ModelType.SINGLE_SPEAKER,
             model_path="models/ugtts-im-speaker-v3/model.pth",
             config_path="models/ugtts-im-speaker-v3/config.json",
@@ -84,7 +84,7 @@ DEFAULT_MODELS_CONFIG = ModelsConfig(
             length_scale=1.0,
         ),
         "ugtts_im_speaker_v2_2": TTSModelConfig(
-            name="ugtts_im_speaker",
+            name="ugtts_im_speaker_v2_2",
             model_type=ModelType.SINGLE_SPEAKER,
             model_path="models/ugtts-im-speaker-v2_2/model.pth",
             config_path="models/ugtts-im-speaker-v2_2/config.json",
