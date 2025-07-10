@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, APIRouter
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,6 +6,9 @@ from typing import Optional, List, Dict, Any
 import os
 import tempfile
 from pathlib import Path
+import pandas as pd
+import uuid as uuid_lib
+from datetime import datetime
 
 from config.models_config import DEFAULT_MODELS_CONFIG, ModelsConfig, TTSModelConfig
 from services.tts_service import TTSService
@@ -62,6 +65,116 @@ class ModelsResponse(BaseModel):
     models: List[ModelInfoResponse]
     total_models: int
     loaded_models: int
+
+# --- MOS Evaluation Utilities and Endpoints (CSV version) ---
+EVAL_TEXTS_CSV = "eval_texts.csv"
+EVAL_METRICS_CSV = "eval_metrics.csv"
+STORAGE_DIR = "storage"
+
+# Ensure storage directory exists
+os.makedirs(STORAGE_DIR, exist_ok=True)
+
+
+def get_random_eval_text():
+    df = pd.read_csv(EVAL_TEXTS_CSV)
+    if df.empty:
+        raise HTTPException(
+            status_code=500, detail="No texts available for evaluation."
+        )
+    row = df.sample(1).iloc[0]
+    return row["id"], row["text"]
+
+
+def log_eval_metric(uuid, id, text, model_name, audio_path, mos_score=None):
+    columns = [
+        "uuid",
+        "id",
+        "text",
+        "model_name",
+        "audio_path",
+        "mos_score",
+        "timestamp",
+    ]
+    if os.path.exists(EVAL_METRICS_CSV):
+        df = pd.read_csv(EVAL_METRICS_CSV)
+    else:
+        df = pd.DataFrame(columns=columns)
+    entry = {
+        "uuid": uuid,
+        "id": id,
+        "text": text,
+        "model_name": model_name,
+        "audio_path": audio_path,
+        "mos_score": mos_score,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+    df.to_csv(EVAL_METRICS_CSV, index=False)
+
+
+eval_router = APIRouter()
+
+
+class EvalSynthesizeRequest(BaseModel):
+    model_name: str
+    speaker: Optional[str] = None
+    length_scale: Optional[float] = None
+
+
+class EvalSynthesizeResponse(BaseModel):
+    uuid: str
+    id: int
+    text: str
+    audio_path: str
+
+
+class EvalRateRequest(BaseModel):
+    uuid: str
+    mos_score: int
+
+
+@eval_router.post("/eval/synthesize", response_model=EvalSynthesizeResponse)
+async def eval_synthesize(request: EvalSynthesizeRequest):
+    id, text = get_random_eval_text()
+    eval_uuid = str(uuid_lib.uuid4())
+    audio_filename = f"{request.model_name}_{eval_uuid}.wav"
+    audio_path = os.path.join(STORAGE_DIR, audio_filename)
+    if not tts_service.is_model_loaded(request.model_name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{request.model_name}' is not loaded. Please load it first.",
+        )
+    synth_path = tts_service.synthesize_speech(
+        model_name=request.model_name,
+        text=text,
+        output_path=audio_path,
+        speaker=request.speaker,
+        length_scale=request.length_scale,
+    )
+    if synth_path is None:
+        raise HTTPException(status_code=500, detail="Failed to synthesize speech.")
+    log_eval_metric(eval_uuid, id, text, request.model_name, audio_path)
+    return EvalSynthesizeResponse(
+        uuid=eval_uuid, id=id, text=text, audio_path=audio_path
+    )
+
+
+@eval_router.post("/eval/rate")
+async def eval_rate(request: EvalRateRequest):
+    if not os.path.exists(EVAL_METRICS_CSV):
+        raise HTTPException(status_code=404, detail="No evaluation metrics found.")
+    df = pd.read_csv(EVAL_METRICS_CSV)
+    idx = df.index[df["uuid"] == request.uuid].tolist()
+    if not idx:
+        raise HTTPException(status_code=404, detail="UUID not found in metrics log.")
+    df.at[idx[0], "mos_score"] = request.mos_score
+    df.at[idx[0], "timestamp"] = datetime.utcnow().isoformat()
+    df.to_csv(EVAL_METRICS_CSV, index=False)
+    return {"status": "success"}
+
+
+# Register the router
+app.include_router(eval_router)
 
 @app.on_event("startup")
 async def startup_event():
