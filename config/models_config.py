@@ -65,5 +65,14 @@ DEFAULT_MODELS_CONFIG = ModelsConfig(
             default_speaker="PT",
             length_scale=1.0,
         ),
+        "ugtts_singlespeaker": TTSModelConfig(
+            name="ugtts_singlespeaker",
+            model_type=ModelType.SINGLE_SPEAKER,
+            model_path="models/ugtts-singlespeaker/best_model.pth",
+            config_path="models/ugtts-singlespeaker/config.json",
+            description="Single-speaker TTS model for Akan language with one voice",
+            language="aka",
+            length_scale=1.0,
+        ),
     },
 )
