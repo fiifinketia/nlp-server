@@ -10,6 +10,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 import uvicorn
 from loguru import logger
+import nest_asyncio
+from pyngrok import ngrok
 
 # Load environment variables
 load_dotenv()
@@ -61,27 +63,35 @@ def main():
     """Main startup function"""
     print("NLP Server Startup")
     print("=" * 50)
-    
+
     # Setup logging
     setup_logging()
     logger.info("Starting NLP Server...")
-    
+
     # Validate environment
     validate_environment()
-    
+
     # Get server configuration
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
     debug = os.getenv("DEBUG", "false").lower() == "true"
-    
+
     logger.info(f"Server configuration: {host}:{port} (debug={debug})")
-    
+
     # Set CUDA device if specified
     cuda_device = os.getenv("CUDA_VISIBLE_DEVICES")
     if cuda_device:
         os.environ["CUDA_VISIBLE_DEVICES"] = cuda_device
         logger.info(f"Set CUDA_VISIBLE_DEVICES to {cuda_device}")
-    
+
+    # Apply nest_asyncio
+    nest_asyncio.apply()
+
+    # Start ngrok tunnel
+    ngrok_tunnel = ngrok.connect(port)
+    print("TTS Server Public URL:", ngrok_tunnel.public_url)
+    print("Server ready")
+
     # Start the server
     try:
         logger.info("Starting FastAPI server...")
