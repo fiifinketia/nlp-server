@@ -66,24 +66,22 @@ class ModelsResponse(BaseModel):
     total_models: int
     loaded_models: int
 
-# --- MOS Evaluation Utilities and Endpoints (CSV version) ---
-EVAL_TEXTS_CSV = "eval_texts.csv"
-EVAL_METRICS_CSV = "eval_metrics.csv"
+# --- MOS Evaluation Utilities and Endpoints (XLSX version) ---
+EVAL_TEXTS_XLSX = "eval_texts.xlsx"
+EVAL_METRICS_XLSX = "eval_metrics.xlsx"
 STORAGE_DIR = "storage"
 
 # Ensure storage directory exists
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
-
 def get_random_eval_text():
-    df = pd.read_csv(EVAL_TEXTS_CSV)
+    df = pd.read_excel(EVAL_TEXTS_XLSX)
     if df.empty:
         raise HTTPException(
             status_code=500, detail="No texts available for evaluation."
         )
     row = df.sample(1).iloc[0]
     return row["id"], row["text"]
-
 
 def log_eval_metric(uuid, id, text, model_name, audio_path, mos_score=None):
     columns = [
@@ -95,8 +93,8 @@ def log_eval_metric(uuid, id, text, model_name, audio_path, mos_score=None):
         "mos_score",
         "timestamp",
     ]
-    if os.path.exists(EVAL_METRICS_CSV):
-        df = pd.read_csv(EVAL_METRICS_CSV)
+    if os.path.exists(EVAL_METRICS_XLSX):
+        df = pd.read_excel(EVAL_METRICS_XLSX)
     else:
         df = pd.DataFrame(columns=columns)
     entry = {
@@ -109,17 +107,14 @@ def log_eval_metric(uuid, id, text, model_name, audio_path, mos_score=None):
         "timestamp": datetime.utcnow().isoformat(),
     }
     df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
-    df.to_csv(EVAL_METRICS_CSV, index=False)
-
+    df.to_excel(EVAL_METRICS_XLSX, index=False)
 
 eval_router = APIRouter()
-
 
 class EvalSynthesizeRequest(BaseModel):
     model_name: str
     speaker: Optional[str] = None
     length_scale: Optional[float] = None
-
 
 class EvalSynthesizeResponse(BaseModel):
     uuid: str
@@ -127,11 +122,9 @@ class EvalSynthesizeResponse(BaseModel):
     text: str
     audio_path: str
 
-
 class EvalRateRequest(BaseModel):
     uuid: str
     mos_score: int
-
 
 @eval_router.post("/eval/synthesize", response_model=EvalSynthesizeResponse)
 async def eval_synthesize(request: EvalSynthesizeRequest):
@@ -158,20 +151,18 @@ async def eval_synthesize(request: EvalSynthesizeRequest):
         uuid=eval_uuid, id=id, text=text, audio_path=audio_path
     )
 
-
 @eval_router.post("/eval/rate")
 async def eval_rate(request: EvalRateRequest):
-    if not os.path.exists(EVAL_METRICS_CSV):
+    if not os.path.exists(EVAL_METRICS_XLSX):
         raise HTTPException(status_code=404, detail="No evaluation metrics found.")
-    df = pd.read_csv(EVAL_METRICS_CSV)
+    df = pd.read_excel(EVAL_METRICS_XLSX)
     idx = df.index[df["uuid"] == request.uuid].tolist()
     if not idx:
         raise HTTPException(status_code=404, detail="UUID not found in metrics log.")
     df.at[idx[0], "mos_score"] = request.mos_score
     df.at[idx[0], "timestamp"] = datetime.utcnow().isoformat()
-    df.to_csv(EVAL_METRICS_CSV, index=False)
+    df.to_excel(EVAL_METRICS_XLSX, index=False)
     return {"status": "success"}
-
 
 # Register the router
 app.include_router(eval_router)
