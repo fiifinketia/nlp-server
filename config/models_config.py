@@ -54,25 +54,16 @@ class ModelsConfig(BaseModel):
 DEFAULT_MODELS_CONFIG = ModelsConfig(
     models_dir="models",
     tts_models={
-        "ugtts_single": TTSModelConfig(
-            name="ugtts_single",
-            model_type=ModelType.SINGLE_SPEAKER,
-            model_path="models/ugtts-single/best_model.pth",
-            config_path="models/ugtts-single/config.json",
-            description="Single speaker TTS model for general use",
-            language="aka",
-            length_scale=1.0
-        ),
-        "ugtts_multi": TTSModelConfig(
-            name="ugtts_multi",
+        "ugtts_multispeaker": TTSModelConfig(
+            name="ugtts_multispeaker",
             model_type=ModelType.MULTI_SPEAKER,
-            model_path="models/ugtts-multi/best_model.pth",
-            config_path="models/ugtts-multi/config.json",
-            description="Multi-speaker TTS model with multiple voices",
+            model_path="models/ugtts-multispeaker/best_model.pth",
+            config_path="models/ugtts-multispeaker/config.json",
+            description="Multi-speaker TTS model for Akan language with multiple voices",
             language="aka",
             speakers=["PT", "IM", "AN"],
             default_speaker="PT",
-            length_scale=1.0
+            length_scale=1.0,
         ),
-    }
-) 
+    },
+)
