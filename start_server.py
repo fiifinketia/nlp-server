@@ -88,7 +88,7 @@ def main():
     nest_asyncio.apply()
 
     # Start ngrok tunnel
-    ngrok_tunnel = ngrok.connect(port)
+    ngrok_tunnel = ngrok.connect(addr=port, domain="game-enormously-monkey.ngrok-free.app")
     print("TTS Server Public URL:", ngrok_tunnel.public_url)
     print("Server ready")
 
