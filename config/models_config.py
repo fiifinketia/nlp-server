@@ -30,6 +30,7 @@ class AutocorrectModelConfig(BaseModel):
     name: str
     dictionary_path: str
     language: str
+    phonetic_index_path: Optional[str] = None
 
 
 class ModelsConfig(BaseModel):
