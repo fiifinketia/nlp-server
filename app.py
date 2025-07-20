@@ -117,6 +117,47 @@ SAMPLES_DIR = "./samples/ugtts"  # Added samples directory
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
 
+
+def apply_autocorrect_to_text(text: str) -> tuple[str, bool]:
+    """
+    Apply autocorrect to text if autocorrect service is available
+    Returns: (corrected_text, was_corrected)
+    """
+    if not autocorrect_service.is_model_loaded("ug-autocorrect"):
+        logger.warning("Autocorrect model not loaded, skipping correction")
+        return text, False
+
+    try:
+        # Perform spell checking on the sentence
+        spellcheck_results = autocorrect_service.spellcheck_sentence(
+            text, "ug-autocorrect"
+        )
+
+        corrected_words = []
+        was_corrected = False
+
+        for result in spellcheck_results:
+            if result["correct"]:
+                corrected_words.append(result["word"])
+            else:
+                # Use the first suggestion if available, otherwise keep original word
+                if result["suggestions"]:
+                    corrected_words.append(result["suggestions"][0])
+                    was_corrected = True
+                    logger.info(
+                        f"Corrected '{result['word']}' to '{result['suggestions'][0]}'"
+                    )
+                else:
+                    corrected_words.append(result["word"])
+
+        corrected_text = " ".join(corrected_words)
+        return corrected_text, was_corrected
+
+    except Exception as e:
+        logger.error(f"Error during autocorrect: {str(e)}")
+        return text, False
+
+
 # Excel file logic for evaluation texts
 
 
