@@ -202,10 +202,50 @@ class AudioEvaluation(BaseModel):
     telephoneUsability: str
 
 
+class UserExperienceSurvey(BaseModel):
+    # Intention to use
+    IN2: str = ""
+    IN3: str = ""
+    IN4: str = ""
+    # Effort
+    EF1: str = ""
+    EF2: str = ""
+    EF3: str = ""
+    # Credibility
+    CR1: str = ""
+    CR2: str = ""
+    CR3: str = ""
+    # Satisfaction
+    SA1: str = ""
+    SA2: str = ""
+    SA3: str = ""
+    # Perceived usefulness
+    PU1: str = ""
+    PU2: str = ""
+    PU3: str = ""
+    # Perceived ease of use
+    PE1: str = ""
+    PE2: str = ""
+    PE3: str = ""
+    # Attitude towards using
+    AT1: str = ""
+    AT2: str = ""
+    AT3: str = ""
+    AT4: str = ""
+    # Behavioral intention
+    BI1: str = ""
+    BI2: str = ""
+    BI3: str = ""
+    # Actual use
+    AU1: str = ""
+    AU2: str = ""
+
+
 class EvaluationSubmission(BaseModel):
     demographics: Demographics
     originalEvaluations: List[AudioEvaluation]
     synthesizedEvaluations: List[AudioEvaluation]
+    userExperienceSurvey: UserExperienceSurvey
 
 
 # Remove these endpoints as they're no longer needed
@@ -327,10 +367,16 @@ async def submit_evaluation(submission: EvaluationSubmission):
                     if "Synthesized_Evaluations" in xls.sheet_names
                     else pd.DataFrame()
                 )
+                existing_survey = (
+                    pd.read_excel(xls, "User_Experience_Survey")
+                    if "User_Experience_Survey" in xls.sheet_names
+                    else pd.DataFrame()
+                )
         else:
             existing_demographics = pd.DataFrame()
             existing_original = pd.DataFrame()
             existing_synthesized = pd.DataFrame()
+            existing_survey = pd.DataFrame()
 
         # Prepare new data
         submission_id = str(uuid_lib.uuid4())
@@ -360,6 +406,12 @@ async def submit_evaluation(submission: EvaluationSubmission):
             synthesized_evaluations.append(eval_dict)
         new_synthesized = pd.DataFrame(synthesized_evaluations)
 
+        # Add submission ID and timestamp to user experience survey
+        survey_dict = submission.userExperienceSurvey.dict()
+        survey_dict["submission_id"] = submission_id
+        survey_dict["timestamp"] = timestamp
+        new_survey = pd.DataFrame([survey_dict])
+
         # Combine existing and new data
         combined_demographics = pd.concat(
             [existing_demographics, new_demographics], ignore_index=True
@@ -370,6 +422,7 @@ async def submit_evaluation(submission: EvaluationSubmission):
         combined_synthesized = pd.concat(
             [existing_synthesized, new_synthesized], ignore_index=True
         )
+        combined_survey = pd.concat([existing_survey, new_survey], ignore_index=True)
 
         # Save to single Excel file
         with pd.ExcelWriter(db_filepath, engine="openpyxl") as writer:
@@ -382,6 +435,9 @@ async def submit_evaluation(submission: EvaluationSubmission):
             combined_synthesized.to_excel(
                 writer, sheet_name="Synthesized_Evaluations", index=False
             )
+            combined_survey.to_excel(
+                writer, sheet_name="User_Experience_Survey", index=False
+            )
 
             # Summary sheet with statistics
             summary_data = {
@@ -389,6 +445,7 @@ async def submit_evaluation(submission: EvaluationSubmission):
                     "Total Submissions",
                     "Total Original Evaluations",
                     "Total Synthesized Evaluations",
+                    "Total User Experience Surveys",
                     "Last Updated",
                     "File Path",
                 ],
@@ -396,6 +453,7 @@ async def submit_evaluation(submission: EvaluationSubmission):
                     len(combined_demographics),
                     len(combined_original),
                     len(combined_synthesized),
+                    len(combined_survey),
                     datetime.utcnow().isoformat(),
                     db_filepath,
                 ],
@@ -413,6 +471,7 @@ async def submit_evaluation(submission: EvaluationSubmission):
             "total_submissions": len(combined_demographics),
             "total_original": len(combined_original),
             "total_synthesized": len(combined_synthesized),
+            "total_surveys": len(combined_survey),
             "timestamp": timestamp,
         }
 
