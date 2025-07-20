@@ -326,8 +326,7 @@ app.include_router(eval_router)
 async def startup_event():
     """Initialize the server on startup"""
     logger.info("Starting NLP Server...")
-    # Initialize database tables
-    await init_database()
+    # await init_database()  # Database initialization disabled
     # Validate model configurations
     errors = models_config.validate_model_paths()
     if errors:
