@@ -11,8 +11,9 @@ import uuid as uuid_lib
 from datetime import datetime
 import shutil
 
-from config.models_config import DEFAULT_MODELS_CONFIG, ModelsConfig, TTSModelConfig
+from config.models_config import DEFAULT_MODELS_CONFIG, ModelsConfig, TTSModelConfig, AutocorrectModelConfig
 from services.tts_service import TTSService
+from services.autocorrect_service import AutocorrectService  # Fixed import
 from loguru import logger
 
 # Initialize FastAPI app
@@ -33,9 +34,18 @@ app.add_middleware(
 
 # Initialize services
 tts_service = TTSService()
+autocorrect_service = AutocorrectService()  # Fixed variable name
+
+# Configure autocorrect model
+autocorrect_config = AutocorrectModelConfig(
+    name="ug-autocorrect",
+    dictionary_path="/tmp/ug-autocorrect/base_dictionary.txt",  # One word per line
+    language="akan"  # or your target language
+)
 
 # Load models configuration
 models_config = DEFAULT_MODELS_CONFIG
+autocorrect_service.load_model(autocorrect_config)  # Fixed service name
 
 # Pydantic models for API requests/responses
 class TTSRequest(BaseModel):
@@ -43,6 +53,7 @@ class TTSRequest(BaseModel):
     model_name: str
     speaker: Optional[str] = None
     length_scale: Optional[float] = None
+    autocorrect: Optional[bool] = False  # Added autocorrect parameter
 
 class TTSResponse(BaseModel):
     success: bool
@@ -50,6 +61,7 @@ class TTSResponse(BaseModel):
     error: Optional[str] = None
     model_info: Optional[Dict[str, Any]] = None
     audio_info: Optional[Dict[str, Any]] = None
+    corrected: Optional[str] = None  # Added corrected text field
 
 class ModelInfoResponse(BaseModel):
     name: str
@@ -96,9 +108,46 @@ class StorageDeleteResponse(BaseModel):
 EVAL_TEXTS_XLSX = "eval_texts.xlsx"
 EVAL_METRICS_XLSX = "eval_metrics.xlsx"
 STORAGE_DIR = "storage"
+SAMPLES_DIR = "./samples/ugtts"  # Added samples directory
 
-# Ensure storage directory exists
+# Ensure directories exist
 os.makedirs(STORAGE_DIR, exist_ok=True)
+os.makedirs(SAMPLES_DIR, exist_ok=True)
+
+def apply_autocorrect_to_text(text: str) -> tuple[str, bool]:
+    """
+    Apply autocorrect to text if autocorrect service is available
+    Returns: (corrected_text, was_corrected)
+    """
+    if not autocorrect_service.is_model_loaded("ug-autocorrect"):
+        logger.warning("Autocorrect model not loaded, skipping correction")
+        return text, False
+    
+    try:
+        # Perform spell checking on the sentence
+        spellcheck_results = autocorrect_service.spellcheck_sentence(text, "ug-autocorrect")
+        
+        corrected_words = []
+        was_corrected = False
+        
+        for result in spellcheck_results:
+            if result["correct"]:
+                corrected_words.append(result["word"])
+            else:
+                # Use the first suggestion if available, otherwise keep original word
+                if result["suggestions"]:
+                    corrected_words.append(result["suggestions"][0])
+                    was_corrected = True
+                    logger.info(f"Corrected '{result['word']}' to '{result['suggestions'][0]}'")
+                else:
+                    corrected_words.append(result["word"])
+        
+        corrected_text = " ".join(corrected_words)
+        return corrected_text, was_corrected
+        
+    except Exception as e:
+        logger.error(f"Error during autocorrect: {str(e)}")
+        return text, False
 
 def get_random_eval_text():
     df = pd.read_excel(EVAL_TEXTS_XLSX)
@@ -141,12 +190,14 @@ class EvalSynthesizeRequest(BaseModel):
     model_name: str
     speaker: Optional[str] = None
     length_scale: Optional[float] = None
+    autocorrect: Optional[bool] = False  # Added autocorrect parameter
 
 class EvalSynthesizeResponse(BaseModel):
     uuid: str
     id: int
     text: str
     audio_path: str
+    corrected: Optional[str] = None  # Added corrected field
 
 class EvalRateRequest(BaseModel):
     uuid: str
@@ -158,23 +209,41 @@ async def eval_synthesize(request: EvalSynthesizeRequest):
     eval_uuid = str(uuid_lib.uuid4())
     audio_filename = f"{request.model_name}_{eval_uuid}.wav"
     audio_path = os.path.join(STORAGE_DIR, audio_filename)
+    
     if not tts_service.is_model_loaded(request.model_name):
         raise HTTPException(
             status_code=400,
             detail=f"Model '{request.model_name}' is not loaded. Please load it first.",
         )
+    
+    # Apply autocorrect if requested
+    corrected_text = None
+    text_to_synthesize = text
+    
+    if request.autocorrect:
+        text_to_synthesize, was_corrected = apply_autocorrect_to_text(text)
+        if was_corrected:
+            corrected_text = text_to_synthesize
+    
     synth_path = tts_service.synthesize_speech(
         model_name=request.model_name,
-        text=text,
+        text=text_to_synthesize,
         output_path=audio_path,
         speaker=request.speaker,
         length_scale=request.length_scale,
     )
+    
     if synth_path is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize speech.")
+    
     log_eval_metric(eval_uuid, id, text, request.model_name, audio_path)
+    
     return EvalSynthesizeResponse(
-        uuid=eval_uuid, id=id, text=text, audio_path=audio_path
+        uuid=eval_uuid, 
+        id=id, 
+        text=text, 
+        audio_path=audio_path,
+        corrected=corrected_text
     )
 
 @eval_router.post("/eval/rate")
@@ -189,6 +258,94 @@ async def eval_rate(request: EvalRateRequest):
     df.at[idx[0], "timestamp"] = datetime.utcnow().isoformat()
     df.to_excel(EVAL_METRICS_XLSX, index=False)
     return {"status": "success"}
+
+# New endpoint for original samples
+@eval_router.get("/evaluation/original-samples", response_model=StorageListResponse)
+async def list_original_samples():
+    """List all original audio samples in ./samples/ugtts"""
+    try:
+        samples_path = Path(SAMPLES_DIR)
+        
+        if not samples_path.exists():
+            return StorageListResponse(files=[], total_files=0, total_size=0)
+        
+        files = []
+        total_size = 0
+        
+        # Look for audio files (common audio extensions)
+        audio_extensions = {'.wav', '.mp3', '.m4a', '.flac', '.aac', '.ogg'}
+        
+        for item in samples_path.rglob('*'):
+            if item.is_file() and item.suffix.lower() in audio_extensions:
+                try:
+                    stat = item.stat()
+                    file_info = StorageFileInfo(
+                        name=item.name,
+                        path=str(item.relative_to(samples_path)),
+                        size=stat.st_size,
+                        modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        is_file=True,
+                        is_dir=False
+                    )
+                    files.append(file_info)
+                    total_size += stat.st_size
+                except (OSError, PermissionError):
+                    # Skip files we can't access
+                    continue
+        
+        # Sort files by name
+        files.sort(key=lambda x: x.name)
+        
+        return StorageListResponse(
+            files=files,
+            total_files=len(files),
+            total_size=total_size
+        )
+    except Exception as e:
+        logger.error(f"Error listing original samples: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list original samples: {str(e)}")
+
+@eval_router.get("/evaluation/original-samples/{file_path:path}")
+async def download_original_sample(file_path: str):
+    """Download an original audio sample from ./samples/ugtts"""
+    try:
+        # Ensure the file path is within the samples directory
+        full_path = Path(SAMPLES_DIR) / file_path
+        samples_path = Path(SAMPLES_DIR).resolve()
+        
+        if not full_path.resolve().is_relative_to(samples_path):
+            raise HTTPException(status_code=400, detail="Access denied: Path outside samples directory")
+        
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail=f"Sample '{file_path}' not found")
+        
+        if not full_path.is_file():
+            raise HTTPException(status_code=400, detail=f"'{file_path}' is not a file")
+        
+        # Determine media type based on file extension
+        media_type = "audio/wav"  # default
+        extension = full_path.suffix.lower()
+        if extension == '.mp3':
+            media_type = "audio/mpeg"
+        elif extension == '.m4a':
+            media_type = "audio/mp4"
+        elif extension == '.flac':
+            media_type = "audio/flac"
+        elif extension == '.aac':
+            media_type = "audio/aac"
+        elif extension == '.ogg':
+            media_type = "audio/ogg"
+        
+        return FileResponse(
+            str(full_path),
+            filename=full_path.name,
+            media_type=media_type
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading sample {file_path}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to download sample: {str(e)}")
 
 # Register the router
 app.include_router(eval_router)
@@ -219,7 +376,7 @@ async def root():
     return {
         "message": "NLP Server is running",
         "version": "1.0.0",
-        "services": ["TTS", "ASR", "LLM", "Translation"],
+        "services": ["TTS", "ASR", "LLM", "Translation", "Autocorrect"],
         "status": "active"
     }
 
@@ -227,10 +384,12 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     loaded_models = len(tts_service.get_loaded_models())
+    loaded_autocorrect_models = len(autocorrect_service.get_loaded_models())
     return {
         "status": "healthy",
         "loaded_tts_models": loaded_models,
-        "total_tts_models": len(models_config.tts_models)
+        "total_tts_models": len(models_config.tts_models),
+        "loaded_autocorrect_models": loaded_autocorrect_models
     }
 
 # TTS Endpoints
@@ -294,10 +453,19 @@ async def synthesize_speech(request: TTSRequest):
                 detail=f"Model '{request.model_name}' is not loaded. Please load it first."
             )
         
+        # Apply autocorrect if requested
+        corrected_text = None
+        text_to_synthesize = request.text
+        
+        if request.autocorrect:
+            text_to_synthesize, was_corrected = apply_autocorrect_to_text(request.text)
+            if was_corrected:
+                corrected_text = text_to_synthesize
+        
         # Generate speech
         audio_path = tts_service.synthesize_speech(
             model_name=request.model_name,
-            text=request.text,
+            text=text_to_synthesize,
             speaker=request.speaker,
             length_scale=request.length_scale
         )
@@ -313,7 +481,8 @@ async def synthesize_speech(request: TTSRequest):
             success=True,
             audio_path=audio_path,
             model_info=model_info,
-            audio_info=audio_info
+            audio_info=audio_info,
+            corrected=corrected_text
         )
         
     except HTTPException:
@@ -327,7 +496,8 @@ async def synthesize_speech_file(
     text: str = Form(...),
     model_name: str = Form(...),
     speaker: Optional[str] = Form(None),
-    length_scale: Optional[float] = Form(1.0)
+    length_scale: Optional[float] = Form(1.0),
+    autocorrect: Optional[bool] = Form(False)  # Added autocorrect parameter
 ):
     """Synthesize speech and return the audio file directly"""
     try:
@@ -338,10 +508,18 @@ async def synthesize_speech_file(
                 detail=f"Model '{model_name}' is not loaded. Please load it first."
             )
         
+        # Apply autocorrect if requested
+        text_to_synthesize = text
+        
+        if autocorrect:
+            text_to_synthesize, was_corrected = apply_autocorrect_to_text(text)
+            if was_corrected:
+                logger.info(f"Applied autocorrect: '{text}' -> '{text_to_synthesize}'")
+        
         # Generate speech
         audio_path = tts_service.synthesize_speech(
             model_name=model_name,
-            text=text,
+            text=text_to_synthesize,
             speaker=speaker,
             length_scale=length_scale
         )
@@ -370,6 +548,65 @@ async def get_model_info(model_name: str):
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' not found or not loaded")
     
     return model_info
+
+# Autocorrect endpoints
+@app.get("/autocorrect/models")
+async def get_autocorrect_models():
+    """Get all loaded autocorrect models"""
+    loaded_models = autocorrect_service.get_loaded_models()
+    models_info = []
+    
+    for model_name, config in loaded_models.items():
+        model_info = autocorrect_service.get_model_info(model_name)
+        if model_info:
+            models_info.append(model_info)
+    
+    return {
+        "models": models_info,
+        "total_models": len(models_info)
+    }
+
+@app.post("/autocorrect/check")
+async def check_spelling(text: str, model_name: str = "ug-autocorrect"):
+    """Check spelling of a single word"""
+    if not autocorrect_service.is_model_loaded(model_name):
+        raise HTTPException(status_code=400, detail=f"Autocorrect model '{model_name}' is not loaded")
+    
+    is_correct = autocorrect_service.check_spelling(text, model_name)
+    suggestions = [] if is_correct else autocorrect_service.suggest_corrections(text, model_name)
+    
+    return {
+        "word": text,
+        "correct": is_correct,
+        "suggestions": suggestions
+    }
+
+@app.post("/autocorrect/sentence")
+async def spellcheck_sentence(text: str, model_name: str = "ug-autocorrect"):
+    """Perform spell checking on a sentence"""
+    if not autocorrect_service.is_model_loaded(model_name):
+        raise HTTPException(status_code=400, detail=f"Autocorrect model '{model_name}' is not loaded")
+    
+    results = autocorrect_service.spellcheck_sentence(text, model_name)
+    
+    # Also provide a corrected version of the sentence
+    corrected_words = []
+    for result in results:
+        if result["correct"]:
+            corrected_words.append(result["word"])
+        else:
+            if result["suggestions"]:
+                corrected_words.append(result["suggestions"][0])
+            else:
+                corrected_words.append(result["word"])
+    
+    corrected_sentence = " ".join(corrected_words)
+    
+    return {
+        "original": text,
+        "corrected": corrected_sentence,
+        "words": results
+    }
 
 # Configuration endpoints
 @app.get("/config/models")
@@ -470,4 +707,4 @@ async def download_storage_file(file_path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)

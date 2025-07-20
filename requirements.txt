@@ -7,3 +7,12 @@ soundfile
 python-dotenv
 loguru
 aiofiles
+
+# Database
+supabase==2.3.0
+asyncpg==0.29.0
+sqlalchemy[asyncio]==2.0.23
+alembic==1.13.1
+
+# Data processing
+pandas==2.1.4

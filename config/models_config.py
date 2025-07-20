@@ -65,15 +65,6 @@ DEFAULT_MODELS_CONFIG = ModelsConfig(
             default_speaker="PT",
             length_scale=1.0,
         ),
-        "ugtts_im_speaker_v4": TTSModelConfig(
-            name="ugtts_im_speaker_v4",
-            model_type=ModelType.SINGLE_SPEAKER,
-            model_path="models/ugtts-im-speaker-v4/model.pth",
-            config_path="models/ugtts-im-speaker-v4/config.json",
-            description="Single-speaker TTS model for Akan language with one voice (IM)",
-            language="aka",
-            length_scale=1.0,
-        ),
         "ugtts_im_speaker_v3": TTSModelConfig(
             name="ugtts_im_speaker_v3",
             model_type=ModelType.SINGLE_SPEAKER,
@@ -82,15 +73,6 @@ DEFAULT_MODELS_CONFIG = ModelsConfig(
             description="Single-speaker TTS model for Akan language with one voice (IM)",
             language="aka",
             length_scale=1.0,
-        ),
-        "ugtts_im_speaker_v2_2": TTSModelConfig(
-            name="ugtts_im_speaker_v2_2",
-            model_type=ModelType.SINGLE_SPEAKER,
-            model_path="models/ugtts-im-speaker-v2_2/model.pth",
-            config_path="models/ugtts-im-speaker-v2_2/config.json",
-            description="Single-speaker TTS model for Akan language with one voice (IM)",
-            language="aka",
-            length_scale=1.0,
-        ),
+        )
     },
 )
