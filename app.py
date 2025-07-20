@@ -161,116 +161,56 @@ def apply_autocorrect_to_text(text: str) -> tuple[str, bool]:
 # Excel file logic for evaluation texts
 
 
-def get_random_eval_text():
-    df = pd.read_excel(EVAL_TEXTS_XLSX)
-    if df.empty:
-        raise HTTPException(
-            status_code=500, detail="No texts available for evaluation."
-        )
-    row = df.sample(1).iloc[0]
-    return row["id"], row["text"]
-
-
-def log_eval_metric(uuid, id, text, model_name, audio_path, mos_score=None):
-    columns = [
-        "uuid",
-        "id",
-        "text",
-        "model_name",
-        "audio_path",
-        "mos_score",
-        "timestamp",
-    ]
-    if os.path.exists(EVAL_METRICS_XLSX):
-        df = pd.read_excel(EVAL_METRICS_XLSX)
-    else:
-        df = pd.DataFrame(columns=columns)
-    entry = {
-        "uuid": uuid,
-        "id": id,
-        "text": text,
-        "model_name": model_name,
-        "audio_path": audio_path,
-        "mos_score": mos_score,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-    df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
-    df.to_excel(EVAL_METRICS_XLSX, index=False)
-
+# Remove these functions as they're no longer needed
+# def get_random_eval_text():
+# def log_eval_metric(uuid, id, text, model_name, audio_path, mos_score=None):
 
 eval_router = APIRouter()
 
-class EvalSynthesizeRequest(BaseModel):
-    model_name: str
-    speaker: Optional[str] = None
-    length_scale: Optional[float] = None
-    autocorrect: Optional[bool] = False  # Added autocorrect parameter
-
-class EvalSynthesizeResponse(BaseModel):
-    uuid: str
-    id: int
-    text: str
-    audio_path: str
-    corrected: Optional[str] = None  # Added corrected field
-
-class EvalRateRequest(BaseModel):
-    uuid: str
-    mos_score: int
+# Remove these models as they're no longer needed
+# class EvalSynthesizeRequest(BaseModel):
+# class EvalSynthesizeResponse(BaseModel):
+# class EvalRateRequest(BaseModel):
 
 
-# Refactor /eval/synthesize endpoint to use Excel
-@eval_router.post("/eval/synthesize", response_model=EvalSynthesizeResponse)
-async def eval_synthesize(request: EvalSynthesizeRequest):
-    id, text = get_random_eval_text()
-    eval_uuid = str(uuid_lib.uuid4())
-    audio_filename = f"{request.model_name}_{eval_uuid}.wav"
-    audio_path = os.path.join(STORAGE_DIR, audio_filename)
-    if not tts_service.is_model_loaded(request.model_name):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model '{request.model_name}' is not loaded. Please load it first.",
-        )
-    # Apply autocorrect if requested
-    corrected_text = None
-    text_to_synthesize = text
-    if request.autocorrect:
-        text_to_synthesize, was_corrected = apply_autocorrect_to_text(text)
-        if was_corrected:
-            corrected_text = text_to_synthesize
-    synth_path = tts_service.synthesize_speech(
-        model_name=request.model_name,
-        text=text_to_synthesize,
-        output_path=audio_path,
-        speaker=request.speaker,
-        length_scale=request.length_scale,
-    )
-    if synth_path is None:
-        raise HTTPException(status_code=500, detail="Failed to synthesize speech")
-    # Log evaluation metric in Excel
-    log_eval_metric(eval_uuid, id, text, request.model_name, audio_path)
-    return EvalSynthesizeResponse(
-        uuid=eval_uuid,
-        id=id,
-        text=text,
-        audio_path=audio_path,
-        corrected=corrected_text,
-    )
+# Evaluation submission models
+class Demographics(BaseModel):
+    gender: str
+    ageRange: str
+    educationLevel: str
+    akanSpeaking: str
+    akanReading: str
+    akanWriting: str
+    akanType: str
+    akanTypeOther: str = ""
 
 
-# Refactor /eval/rate endpoint to use Excel
-@eval_router.post("/eval/rate")
-async def eval_rate(request: EvalRateRequest):
-    # Update the MOS score for the given uuid in the Excel file
-    if not os.path.exists(EVAL_METRICS_XLSX):
-        raise HTTPException(status_code=404, detail="No evaluation metrics found")
-    df = pd.read_excel(EVAL_METRICS_XLSX)
-    idx = df[df["uuid"] == request.uuid].index
-    if len(idx) == 0:
-        raise HTTPException(status_code=404, detail="Evaluation metric not found")
-    df.loc[idx, "mos_score"] = request.mos_score
-    df.to_excel(EVAL_METRICS_XLSX, index=False)
-    return {"success": True, "message": "MOS score updated"}
+class AudioEvaluation(BaseModel):
+    audioId: str
+    speaker: str
+    audioQuality: str
+    voicePleasantness: str
+    naturalness: str
+    continuity: str
+    listeningEase: str
+    understandingEffort: str
+    pronunciationAnomalies: str
+    deliverySpeed: str
+    intelligibilityNaturalness: str = ""
+    wordClarity: str
+    soundDistinguishability: str
+    telephoneUsability: str
 
+
+class EvaluationSubmission(BaseModel):
+    demographics: Demographics
+    originalEvaluations: List[AudioEvaluation]
+    synthesizedEvaluations: List[AudioEvaluation]
+
+
+# Remove these endpoints as they're no longer needed
+# @eval_router.post("/eval/synthesize", response_model=EvalSynthesizeResponse)
+# @eval_router.post("/eval/rate")
 
 # New endpoint for original samples
 @eval_router.get("/evaluation/original-samples", response_model=StorageListResponse)
@@ -325,16 +265,16 @@ async def download_original_sample(file_path: str):
         # Ensure the file path is within the samples directory
         full_path = Path(SAMPLES_DIR) / file_path
         samples_path = Path(SAMPLES_DIR).resolve()
-        
+
         if not full_path.resolve().is_relative_to(samples_path):
             raise HTTPException(status_code=400, detail="Access denied: Path outside samples directory")
-        
+
         if not full_path.exists():
             raise HTTPException(status_code=404, detail=f"Sample '{file_path}' not found")
-        
+
         if not full_path.is_file():
             raise HTTPException(status_code=400, detail=f"'{file_path}' is not a file")
-        
+
         # Determine media type based on file extension
         media_type = "audio/wav"  # default
         extension = full_path.suffix.lower()
@@ -348,7 +288,7 @@ async def download_original_sample(file_path: str):
             media_type = "audio/aac"
         elif extension == '.ogg':
             media_type = "audio/ogg"
-        
+
         return FileResponse(
             str(full_path),
             filename=full_path.name,
@@ -359,6 +299,82 @@ async def download_original_sample(file_path: str):
     except Exception as e:
         logger.error(f"Error downloading sample {file_path}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to download sample: {str(e)}")
+
+
+# Add evaluation submission endpoint
+@eval_router.post("/evaluation/submit")
+async def submit_evaluation(submission: EvaluationSubmission):
+    """Submit a complete evaluation with demographics and audio evaluations"""
+    try:
+        # Create filename with timestamp
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"evaluation_submission_{timestamp}_{uuid_lib.uuid4().hex[:8]}.xlsx"
+        filepath = os.path.join(STORAGE_DIR, filename)
+
+        # Prepare data for Excel export
+        with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+            # Demographics sheet
+            demographics_data = {
+                "Field": list(submission.demographics.dict().keys()),
+                "Value": list(submission.demographics.dict().values()),
+            }
+            demographics_df = pd.DataFrame(demographics_data)
+            demographics_df.to_excel(writer, sheet_name="Demographics", index=False)
+
+            # Original evaluations sheet
+            if submission.originalEvaluations:
+                original_df = pd.DataFrame(
+                    [eval.dict() for eval in submission.originalEvaluations]
+                )
+                original_df.to_excel(
+                    writer, sheet_name="Original_Evaluations", index=False
+                )
+
+            # Synthesized evaluations sheet
+            if submission.synthesizedEvaluations:
+                synthesized_df = pd.DataFrame(
+                    [eval.dict() for eval in submission.synthesizedEvaluations]
+                )
+                synthesized_df.to_excel(
+                    writer, sheet_name="Synthesized_Evaluations", index=False
+                )
+
+            # Summary sheet
+            summary_data = {
+                "Metric": [
+                    "Total Original Evaluations",
+                    "Total Synthesized Evaluations",
+                    "Submission Timestamp",
+                    "File Path",
+                ],
+                "Value": [
+                    len(submission.originalEvaluations),
+                    len(submission.synthesizedEvaluations),
+                    datetime.utcnow().isoformat(),
+                    filepath,
+                ],
+            }
+            summary_df = pd.DataFrame(summary_data)
+            summary_df.to_excel(writer, sheet_name="Summary", index=False)
+
+        logger.info(f"Evaluation submission saved to {filepath}")
+
+        return {
+            "success": True,
+            "message": "Evaluation submitted successfully",
+            "file_path": filepath,
+            "filename": filename,
+            "total_original": len(submission.originalEvaluations),
+            "total_synthesized": len(submission.synthesizedEvaluations),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Error submitting evaluation: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to submit evaluation: {str(e)}"
+        )
+
 
 # Register the router
 app.include_router(eval_router)
