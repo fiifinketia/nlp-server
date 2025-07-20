@@ -6,9 +6,168 @@ from pathlib import Path
 from loguru import logger
 
 from config.models_config import AutocorrectModelConfig, ModelType
-from core.phonetic_hash import phonetic_hash
-from core.trie import Trie
-from core.distance import weighted_edit_distance
+
+
+from typing import Tuple
+
+
+class TrieNode:
+    def __init__(self):
+        self.children = {}
+        self.is_end_of_word = False
+
+
+class Trie:
+    def __init__(self):
+        self.root = TrieNode()
+
+    def insert(self, word: str):
+        current = self.root
+        for char in word:
+            if char not in current.children:
+                current.children[char] = TrieNode()
+            current = current.children[char]
+        current.is_end_of_word = True
+
+    def search(self, word: str) -> bool:
+        current = self.root
+        for char in word:
+            if char not in current.children:
+                return False
+            current = current.children[char]
+        return current.is_end_of_word
+
+
+# Substitution cost map
+WEIGHT_SUBSTITUTION = {
+    ("a", "s"): 0.5,
+    ("s", "a"): 0.5,
+    ("e", "ɛ"): 0.5,
+    ("ɛ", "e"): 0.5,
+    ("o", "ɔ"): 0.5,
+    ("ɔ", "o"): 0.5,
+    (")", "ɔ"): 0.5,
+    (")", "ɔ"): 0.5,
+    ("3", "ɛ"): 0.5,
+    ("ɛ", "3"): 0.5,
+    ("ɔ", "ɛ"): 0.5,
+    ("ɛ", "e"): 0.5,
+    ("ɛ", "a"): 0.7,
+    ("a", "ɛ"): 0.7,
+    ("u", "o"): 0.6,
+    ("o", "u"): 0.6,
+    ("e", "i"): 0.7,
+    ("i", "e"): 0.7,
+}
+
+DEFAULT_SUB_COST = 1.0
+INSERT_COST = 1.0
+DELETE_COST = 1.0
+TRANSPOSE_COST = 0.6  # when adjacent characters are swapped
+
+
+def weighted_edit_distance(word1: str, word2: str) -> float:
+    len1, len2 = len(word1), len(word2)
+    dp = [[0.0] * (len2 + 1) for _ in range(len1 + 1)]
+
+    # Base cases
+    for i in range(len1 + 1):
+        dp[i][0] = i * DELETE_COST
+    for j in range(len2 + 1):
+        dp[0][j] = j * INSERT_COST
+
+    for i in range(1, len1 + 1):
+        for j in range(1, len2 + 1):
+            char1 = word1[i - 1]
+            char2 = word2[j - 1]
+
+            # Cost of substitution (sound-based)
+            if char1 == char2:
+                sub_cost = 0
+            else:
+                sub_cost = WEIGHT_SUBSTITUTION.get((char1, char2), DEFAULT_SUB_COST)
+
+            dp[i][j] = min(
+                dp[i - 1][j] + DELETE_COST,  # Omission
+                dp[i][j - 1] + INSERT_COST,  # Insertion
+                dp[i - 1][j - 1] + sub_cost,  # Substitution
+            )
+
+            # Transposition (e.g., "kaey" → "kaye")
+            if (
+                i > 1
+                and j > 1
+                and word1[i - 1] == word2[j - 2]
+                and word1[i - 2] == word2[j - 1]
+            ):
+                dp[i][j] = min(dp[i][j], dp[i - 2][j - 2] + TRANSPOSE_COST)
+
+    return dp[len1][len2]
+
+
+# Digraph-to-code map
+DIGRAPH_MAP = {
+    "ky": "K",
+    "gy": "G",
+    "tw": "T",
+    "dw": "D",
+    "hw": "H",
+    "kw": "Q",  # W
+    "ny": "N",
+    "sh": "S",
+}
+
+# # Monograph (single character) map
+MONO_MAP = {
+    "ɛ": "E",
+    "e": "E",
+    "ɔ": "O",
+    "o": "O",
+    "a": "A",
+    "i": "I",
+    "u": "U",
+    "m": "M",
+    "n": "M",
+    "ŋ": "M",
+    "r": "R",
+    "h": "H",
+    "f": "F",
+    "b": "B",
+    "d": "D",
+    "k": "K",
+    "g": "G",
+    "l": "L",
+    "s": "S",
+    "t": "T",
+    "w": "W",
+    "y": "Y",
+}
+
+
+def phonetic_hash(word: str) -> str:
+    word = word.lower()
+    hash_code = []
+    i = 0
+
+    while i < len(word):
+        # First check for digraph match
+        if i + 1 < len(word) and word[i : i + 2] in DIGRAPH_MAP:
+            hash_code.append(DIGRAPH_MAP[word[i : i + 2]])
+            i += 2
+        else:
+            # Then map individual character
+            ch = word[i]
+            if ch in MONO_MAP:
+                hash_code.append(MONO_MAP[ch])
+            i += 1
+
+    # Optionally: remove duplicate consecutive characters
+    compressed = [hash_code[0]] if hash_code else []
+    for c in hash_code[1:]:
+        if c != compressed[-1]:
+            compressed.append(c)
+
+    return "".join(compressed)
 
 
 def load_base_words_from_file(filepath: str) -> List[str]:
