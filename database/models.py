@@ -23,7 +23,7 @@ class EvalText(Base):
 class EvalMetric(Base):
     """Model for evaluation metrics"""
     __tablename__ = "eval_metrics"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     uuid = Column(UUID(as_uuid=True), default=uuid_lib.uuid4, unique=True, nullable=False, index=True)
     eval_text_id = Column(Integer, nullable=False)  # Foreign key to eval_texts
@@ -38,7 +38,7 @@ class EvalMetric(Base):
     audio_duration = Column(Float, nullable=True)  # Duration of generated audio
     autocorrect_used = Column(Boolean, default=False)
     user_feedback = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)  # Additional metadata
+    meta = Column(JSON, nullable=True)  # Renamed from metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -59,12 +59,12 @@ class ModelUsage(Base):
 class SystemLog(Base):
     """Model for system logs and events"""
     __tablename__ = "system_logs"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     level = Column(String(20), nullable=False)  # INFO, WARNING, ERROR, etc.
     service = Column(String(50), nullable=False)  # tts, autocorrect, etc.
     message = Column(Text, nullable=False)
-    details = Column(JSON, nullable=True)
+    meta = Column(JSON, nullable=True)  # Renamed from metadata
     user_id = Column(String(100), nullable=True)
     session_id = Column(String(100), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -72,7 +72,7 @@ class SystemLog(Base):
 class AudioFile(Base):
     """Model for tracking generated audio files"""
     __tablename__ = "audio_files"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=False)
@@ -86,7 +86,7 @@ class AudioFile(Base):
     corrected_text = Column(Text, nullable=True)
     speaker = Column(String(100), nullable=True)
     length_scale = Column(Float, default=1.0)
-    metadata = Column(JSON, nullable=True)
+    meta = Column(JSON, nullable=True)  # Renamed from metadata
     eval_metric_uuid = Column(UUID(as_uuid=True), nullable=True)  # Link to evaluation
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     is_deleted = Column(Boolean, default=False)

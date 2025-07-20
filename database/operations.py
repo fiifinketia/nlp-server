@@ -14,7 +14,7 @@ from .models import EvalText, EvalMetric, ModelUsage, SystemLog, AudioFile, User
 
 class DatabaseOperations:
     """Database operations class"""
-    
+
     @staticmethod
     async def create_eval_text(
         db: AsyncSession,
@@ -40,7 +40,7 @@ class DatabaseOperations:
             await db.rollback()
             logger.error(f"Failed to create evaluation text: {e}")
             raise
-    
+
     @staticmethod
     async def get_random_eval_text(db: AsyncSession, language: Optional[str] = None) -> Optional[EvalText]:
         """Get a random evaluation text"""
@@ -48,21 +48,21 @@ class DatabaseOperations:
             query = select(EvalText).where(EvalText.is_active == True)
             if language:
                 query = query.where(EvalText.language == language)
-            
+
             result = await db.execute(query)
             texts = result.scalars().all()
-            
+
             if not texts:
                 logger.warning("No evaluation texts found")
                 return None
-            
+
             selected_text = random.choice(texts)
             logger.info(f"Selected evaluation text ID: {selected_text.id}")
             return selected_text
         except Exception as e:
             logger.error(f"Failed to get random evaluation text: {e}")
             return None
-    
+
     @staticmethod
     async def create_eval_metric(
         db: AsyncSession,
@@ -76,7 +76,7 @@ class DatabaseOperations:
         autocorrect_used: bool = False,
         synthesis_duration: Optional[float] = None,
         audio_duration: Optional[float] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        meta: Optional[Dict[str, Any]] = None,
     ) -> EvalMetric:
         """Create a new evaluation metric"""
         try:
@@ -91,7 +91,7 @@ class DatabaseOperations:
                 autocorrect_used=autocorrect_used,
                 synthesis_duration=synthesis_duration,
                 audio_duration=audio_duration,
-                metadata=metadata
+                meta=meta,
             )
             db.add(eval_metric)
             await db.commit()
@@ -102,7 +102,7 @@ class DatabaseOperations:
             await db.rollback()
             logger.error(f"Failed to create evaluation metric: {e}")
             raise
-    
+
     @staticmethod
     async def update_eval_metric_score(
         db: AsyncSession,
@@ -115,15 +115,15 @@ class DatabaseOperations:
             query = select(EvalMetric).where(EvalMetric.uuid == uuid)
             result = await db.execute(query)
             eval_metric = result.scalar_one_or_none()
-            
+
             if not eval_metric:
                 logger.warning(f"Evaluation metric with UUID {uuid} not found")
                 return None
-            
+
             eval_metric.mos_score = mos_score
             eval_metric.user_feedback = user_feedback
             eval_metric.updated_at = datetime.utcnow()
-            
+
             await db.commit()
             await db.refresh(eval_metric)
             logger.info(f"Updated MOS score for UUID: {uuid}")
@@ -132,7 +132,7 @@ class DatabaseOperations:
             await db.rollback()
             logger.error(f"Failed to update evaluation metric score: {e}")
             raise
-    
+
     @staticmethod
     async def get_eval_metric_by_uuid(db: AsyncSession, uuid: uuid_lib.UUID) -> Optional[EvalMetric]:
         """Get evaluation metric by UUID"""
@@ -143,7 +143,7 @@ class DatabaseOperations:
         except Exception as e:
             logger.error(f"Failed to get evaluation metric by UUID: {e}")
             return None
-    
+
     @staticmethod
     async def create_audio_file(
         db: AsyncSession,
@@ -159,7 +159,7 @@ class DatabaseOperations:
         sample_rate: Optional[int] = None,
         channels: Optional[int] = None,
         eval_metric_uuid: Optional[uuid_lib.UUID] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        meta: Optional[Dict[str, Any]] = None,
     ) -> AudioFile:
         """Create a new audio file record"""
         try:
@@ -176,7 +176,7 @@ class DatabaseOperations:
                 sample_rate=sample_rate,
                 channels=channels,
                 eval_metric_uuid=eval_metric_uuid,
-                metadata=metadata
+                meta=meta,
             )
             db.add(audio_file)
             await db.commit()
@@ -187,7 +187,7 @@ class DatabaseOperations:
             await db.rollback()
             logger.error(f"Failed to create audio file record: {e}")
             raise
-    
+
     @staticmethod
     async def update_model_usage(
         db: AsyncSession,
@@ -204,7 +204,7 @@ class DatabaseOperations:
             )
             result = await db.execute(query)
             model_usage = result.scalar_one_or_none()
-            
+
             if model_usage:
                 # Update existing record
                 model_usage.usage_count += 1
@@ -225,7 +225,7 @@ class DatabaseOperations:
                     last_used=datetime.utcnow()
                 )
                 db.add(model_usage)
-            
+
             await db.commit()
             await db.refresh(model_usage)
             return model_usage
@@ -233,7 +233,7 @@ class DatabaseOperations:
             await db.rollback()
             logger.error(f"Failed to update model usage: {e}")
             raise
-    
+
     @staticmethod
     async def log_system_event(
         db: AsyncSession,
@@ -262,7 +262,7 @@ class DatabaseOperations:
             await db.rollback()
             logger.error(f"Failed to log system event: {e}")
             raise
-    
+
     @staticmethod
     async def get_model_statistics(db: AsyncSession, model_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get model usage statistics"""
@@ -270,10 +270,10 @@ class DatabaseOperations:
             query = select(ModelUsage)
             if model_name:
                 query = query.where(ModelUsage.model_name == model_name)
-            
+
             result = await db.execute(query)
             usages = result.scalars().all()
-            
+
             stats = []
             for usage in usages:
                 stats.append({
@@ -285,12 +285,12 @@ class DatabaseOperations:
                     "last_used": usage.last_used,
                     "created_at": usage.created_at
                 })
-            
+
             return stats
         except Exception as e:
             logger.error(f"Failed to get model statistics: {e}")
             return []
-    
+
     @staticmethod
     async def get_evaluation_results(
         db: AsyncSession,
@@ -302,19 +302,19 @@ class DatabaseOperations:
         """Get evaluation results with filters"""
         try:
             query = select(EvalMetric)
-            
+
             if model_name:
                 query = query.where(EvalMetric.model_name == model_name)
             if start_date:
                 query = query.where(EvalMetric.created_at >= start_date)
             if end_date:
                 query = query.where(EvalMetric.created_at <= end_date)
-            
+
             query = query.order_by(EvalMetric.created_at.desc()).limit(limit)
-            
+
             result = await db.execute(query)
             metrics = result.scalars().all()
-            
+
             results = []
             for metric in metrics:
                 results.append({
@@ -333,7 +333,7 @@ class DatabaseOperations:
                     "user_feedback": metric.user_feedback,
                     "created_at": metric.created_at
                 })
-            
+
             return results
         except Exception as e:
             logger.error(f"Failed to get evaluation results: {e}")
