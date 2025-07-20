@@ -21,9 +21,15 @@ class TTSModelConfig(BaseModel):
     default_speaker: Optional[str] = Field(None, description="Default speaker for multi-speaker models")
     length_scale: float = Field(1.0, description="Default length scale for speech generation")
     is_active: bool = Field(True, description="Whether the model is active and available")
-    
+
     class Config:
         use_enum_values = True
+
+
+class AutocorrectModelConfig(BaseModel):
+    name: str
+    dictionary_path: str
+    language: str
 
 
 class ModelsConfig(BaseModel):
