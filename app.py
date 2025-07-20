@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, APIRouter
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, APIRouter, Depends
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,6 +15,9 @@ from config.models_config import DEFAULT_MODELS_CONFIG, ModelsConfig, TTSModelCo
 from services.tts_service import TTSService
 from services.autocorrect_service import AutocorrectService  # Fixed import
 from loguru import logger
+from database.config import get_db, init_database  # Import DB session and init
+from database.operations import DatabaseOperations  # Import DB operations
+from sqlalchemy.ext.asyncio import AsyncSession  # For type hinting
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -104,9 +107,7 @@ class StorageDeleteResponse(BaseModel):
     success: bool
     message: str
 
-# --- MOS Evaluation Utilities and Endpoints (XLSX version) ---
-EVAL_TEXTS_XLSX = "eval_texts.xlsx"
-EVAL_METRICS_XLSX = "eval_metrics.xlsx"
+# --- MOS Evaluation Utilities and Endpoints (DB version) ---
 STORAGE_DIR = "storage"
 SAMPLES_DIR = "./samples/ugtts"  # Added samples directory
 
@@ -114,75 +115,53 @@ SAMPLES_DIR = "./samples/ugtts"  # Added samples directory
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
 
-def apply_autocorrect_to_text(text: str) -> tuple[str, bool]:
-    """
-    Apply autocorrect to text if autocorrect service is available
-    Returns: (corrected_text, was_corrected)
-    """
-    if not autocorrect_service.is_model_loaded("ug-autocorrect"):
-        logger.warning("Autocorrect model not loaded, skipping correction")
-        return text, False
-    
-    try:
-        # Perform spell checking on the sentence
-        spellcheck_results = autocorrect_service.spellcheck_sentence(text, "ug-autocorrect")
-        
-        corrected_words = []
-        was_corrected = False
-        
-        for result in spellcheck_results:
-            if result["correct"]:
-                corrected_words.append(result["word"])
-            else:
-                # Use the first suggestion if available, otherwise keep original word
-                if result["suggestions"]:
-                    corrected_words.append(result["suggestions"][0])
-                    was_corrected = True
-                    logger.info(f"Corrected '{result['word']}' to '{result['suggestions'][0]}'")
-                else:
-                    corrected_words.append(result["word"])
-        
-        corrected_text = " ".join(corrected_words)
-        return corrected_text, was_corrected
-        
-    except Exception as e:
-        logger.error(f"Error during autocorrect: {str(e)}")
-        return text, False
+# Remove Excel file logic and replace with DB logic
 
-def get_random_eval_text():
-    df = pd.read_excel(EVAL_TEXTS_XLSX)
-    if df.empty:
+# --- Evaluation Endpoints ---
+from fastapi import Depends
+
+
+# Refactored get_random_eval_text to use DB
+async def get_random_eval_text_db(db: AsyncSession, language: str = "akan"):
+    eval_text = await DatabaseOperations.get_random_eval_text(db, language=language)
+    if not eval_text:
         raise HTTPException(
             status_code=500, detail="No texts available for evaluation."
         )
-    row = df.sample(1).iloc[0]
-    return row["id"], row["text"]
+    return eval_text.id, eval_text.text
 
-def log_eval_metric(uuid, id, text, model_name, audio_path, mos_score=None):
-    columns = [
-        "uuid",
-        "id",
-        "text",
-        "model_name",
-        "audio_path",
-        "mos_score",
-        "timestamp",
-    ]
-    if os.path.exists(EVAL_METRICS_XLSX):
-        df = pd.read_excel(EVAL_METRICS_XLSX)
-    else:
-        df = pd.DataFrame(columns=columns)
-    entry = {
-        "uuid": uuid,
-        "id": id,
-        "text": text,
-        "model_name": model_name,
-        "audio_path": audio_path,
-        "mos_score": mos_score,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-    df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
-    df.to_excel(EVAL_METRICS_XLSX, index=False)
+
+# Refactored log_eval_metric to use DB
+async def log_eval_metric_db(
+    db: AsyncSession,
+    eval_text_id,
+    original_text,
+    model_name,
+    audio_path,
+    corrected_text=None,
+    speaker=None,
+    length_scale=1.0,
+    autocorrect_used=False,
+    synthesis_duration=None,
+    audio_duration=None,
+    metadata=None,
+):
+    metric = await DatabaseOperations.create_eval_metric(
+        db=db,
+        eval_text_id=eval_text_id,
+        original_text=original_text,
+        model_name=model_name,
+        audio_path=audio_path,
+        corrected_text=corrected_text,
+        speaker=speaker,
+        length_scale=length_scale,
+        autocorrect_used=autocorrect_used,
+        synthesis_duration=synthesis_duration,
+        audio_duration=audio_duration,
+        metadata=metadata,
+    )
+    return metric
+
 
 eval_router = APIRouter()
 
@@ -203,28 +182,34 @@ class EvalRateRequest(BaseModel):
     uuid: str
     mos_score: int
 
+
 @eval_router.post("/eval/synthesize", response_model=EvalSynthesizeResponse)
-async def eval_synthesize(request: EvalSynthesizeRequest):
-    id, text = get_random_eval_text()
+async def eval_synthesize(
+    request: EvalSynthesizeRequest, db: AsyncSession = Depends(get_db)
+):
+    eval_text = await DatabaseOperations.get_random_eval_text(db)
+    if not eval_text:
+        raise HTTPException(
+            status_code=500, detail="No texts available for evaluation."
+        )
+    id, text = eval_text.id, eval_text.text
     eval_uuid = str(uuid_lib.uuid4())
     audio_filename = f"{request.model_name}_{eval_uuid}.wav"
     audio_path = os.path.join(STORAGE_DIR, audio_filename)
-    
     if not tts_service.is_model_loaded(request.model_name):
         raise HTTPException(
             status_code=400,
             detail=f"Model '{request.model_name}' is not loaded. Please load it first.",
         )
-    
     # Apply autocorrect if requested
     corrected_text = None
     text_to_synthesize = text
-    
+    autocorrect_used = False
     if request.autocorrect:
         text_to_synthesize, was_corrected = apply_autocorrect_to_text(text)
+        autocorrect_used = was_corrected
         if was_corrected:
             corrected_text = text_to_synthesize
-    
     synth_path = tts_service.synthesize_speech(
         model_name=request.model_name,
         text=text_to_synthesize,
@@ -232,32 +217,39 @@ async def eval_synthesize(request: EvalSynthesizeRequest):
         speaker=request.speaker,
         length_scale=request.length_scale,
     )
-    
     if synth_path is None:
-        raise HTTPException(status_code=500, detail="Failed to synthesize speech.")
-    
-    log_eval_metric(eval_uuid, id, text, request.model_name, audio_path)
-    
-    return EvalSynthesizeResponse(
-        uuid=eval_uuid, 
-        id=id, 
-        text=text, 
+        raise HTTPException(status_code=500, detail="Failed to synthesize speech")
+    # Log evaluation metric in DB
+    await log_eval_metric_db(
+        db=db,
+        eval_text_id=id,
+        original_text=text,
+        model_name=request.model_name,
         audio_path=audio_path,
-        corrected=corrected_text
+        corrected_text=corrected_text,
+        speaker=request.speaker,
+        length_scale=request.length_scale or 1.0,
+        autocorrect_used=autocorrect_used,
+        # Optionally add synthesis_duration/audio_duration/metadata if available
+    )
+    return EvalSynthesizeResponse(
+        uuid=eval_uuid,
+        id=id,
+        text=text,
+        audio_path=audio_path,
+        corrected=corrected_text,
     )
 
+
 @eval_router.post("/eval/rate")
-async def eval_rate(request: EvalRateRequest):
-    if not os.path.exists(EVAL_METRICS_XLSX):
-        raise HTTPException(status_code=404, detail="No evaluation metrics found.")
-    df = pd.read_excel(EVAL_METRICS_XLSX)
-    idx = df.index[df["uuid"] == request.uuid].tolist()
-    if not idx:
-        raise HTTPException(status_code=404, detail="UUID not found in metrics log.")
-    df.at[idx[0], "mos_score"] = request.mos_score
-    df.at[idx[0], "timestamp"] = datetime.utcnow().isoformat()
-    df.to_excel(EVAL_METRICS_XLSX, index=False)
-    return {"status": "success"}
+async def eval_rate(request: EvalRateRequest, db: AsyncSession = Depends(get_db)):
+    metric = await DatabaseOperations.update_eval_metric_score(
+        db, uuid_lib.UUID(request.uuid), request.mos_score
+    )
+    if not metric:
+        raise HTTPException(status_code=404, detail="Evaluation metric not found")
+    return {"success": True, "message": "MOS score updated"}
+
 
 # New endpoint for original samples
 @eval_router.get("/evaluation/original-samples", response_model=StorageListResponse)
@@ -354,14 +346,14 @@ app.include_router(eval_router)
 async def startup_event():
     """Initialize the server on startup"""
     logger.info("Starting NLP Server...")
-    
+    # Initialize database tables
+    await init_database()
     # Validate model configurations
     errors = models_config.validate_model_paths()
     if errors:
         logger.warning("Some model files are missing:")
         for error in errors:
             logger.warning(f"  - {error}")
-    
     # Load active models
     active_models = models_config.get_active_tts_models()
     for model_name, model_config in active_models.items():
