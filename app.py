@@ -464,31 +464,39 @@ async def synthesize_speech(request: TTSRequest):
                 status_code=400, 
                 detail=f"Model '{request.model_name}' is not loaded. Please load it first."
             )
-        
+
         # Apply autocorrect if requested
         corrected_text = None
         text_to_synthesize = request.text
-        
+
         if request.autocorrect:
             text_to_synthesize, was_corrected = apply_autocorrect_to_text(request.text)
             if was_corrected:
                 corrected_text = text_to_synthesize
-        
+
+        # Generate unique filename in storage directory
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = (
+            f"tts_{request.model_name}_{timestamp}_{uuid_lib.uuid4().hex[:8]}.wav"
+        )
+        audio_path = os.path.join(STORAGE_DIR, filename)
+
         # Generate speech
-        audio_path = tts_service.synthesize_speech(
+        result_path = tts_service.synthesize_speech(
             model_name=request.model_name,
             text=text_to_synthesize,
+            output_path=audio_path,
             speaker=request.speaker,
-            length_scale=request.length_scale
+            length_scale=request.length_scale,
         )
-        
-        if audio_path is None:
+
+        if result_path is None:
             raise HTTPException(status_code=500, detail="Failed to synthesize speech")
-        
+
         # Get model and audio information
         model_info = tts_service.get_model_info(request.model_name)
         audio_info = tts_service.get_audio_info(audio_path)
-        
+
         return TTSResponse(
             success=True,
             audio_path=audio_path,
@@ -496,7 +504,7 @@ async def synthesize_speech(request: TTSRequest):
             audio_info=audio_info,
             corrected=corrected_text
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -519,33 +527,35 @@ async def synthesize_speech_file(
                 status_code=400, 
                 detail=f"Model '{model_name}' is not loaded. Please load it first."
             )
-        
+
         # Apply autocorrect if requested
         text_to_synthesize = text
-        
+
         if autocorrect:
             text_to_synthesize, was_corrected = apply_autocorrect_to_text(text)
             if was_corrected:
                 logger.info(f"Applied autocorrect: '{text}' -> '{text_to_synthesize}'")
-        
+
+        # Generate unique filename in storage directory
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"tts_{model_name}_{timestamp}_{uuid_lib.uuid4().hex[:8]}.wav"
+        audio_path = os.path.join(STORAGE_DIR, filename)
+
         # Generate speech
-        audio_path = tts_service.synthesize_speech(
+        result_path = tts_service.synthesize_speech(
             model_name=model_name,
             text=text_to_synthesize,
+            output_path=audio_path,
             speaker=speaker,
-            length_scale=length_scale
+            length_scale=length_scale,
         )
-        
-        if audio_path is None:
+
+        if result_path is None:
             raise HTTPException(status_code=500, detail="Failed to synthesize speech")
-        
+
         # Return the audio file
-        return FileResponse(
-            audio_path,
-            media_type="audio/wav",
-            filename=f"tts_output_{model_name}.wav"
-        )
-        
+        return FileResponse(audio_path, media_type="audio/wav", filename=filename)
+
     except HTTPException:
         raise
     except Exception as e:
