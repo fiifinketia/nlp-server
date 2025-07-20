@@ -6,25 +6,25 @@ from typing import AsyncGenerator
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, sessionmaker
-from supabase import create_client, Client
+# from supabase import create_client, Client  # Commented out
 from loguru import logger
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Supabase configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# SUPABASE_URL = os.getenv("SUPABASE_URL")
+# SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
+# if not SUPABASE_URL or not SUPABASE_KEY:
+#     raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
 
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL must be set in environment variables")
 
 # Create Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # SQLAlchemy setup for async operations
 engine = create_async_engine(

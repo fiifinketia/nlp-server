@@ -107,7 +107,9 @@ class StorageDeleteResponse(BaseModel):
     success: bool
     message: str
 
-# --- MOS Evaluation Utilities and Endpoints (DB version) ---
+# --- MOS Evaluation Utilities and Endpoints (XLSX version) ---
+EVAL_TEXTS_XLSX = "eval_texts.xlsx"
+EVAL_METRICS_XLSX = "eval_metrics.xlsx"
 STORAGE_DIR = "storage"
 SAMPLES_DIR = "./samples/ugtts"  # Added samples directory
 
@@ -115,52 +117,44 @@ SAMPLES_DIR = "./samples/ugtts"  # Added samples directory
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
 
-# Remove Excel file logic and replace with DB logic
-
-# --- Evaluation Endpoints ---
-from fastapi import Depends
+# Excel file logic for evaluation texts
 
 
-# Refactored get_random_eval_text to use DB
-async def get_random_eval_text_db(db: AsyncSession, language: str = "akan"):
-    eval_text = await DatabaseOperations.get_random_eval_text(db, language=language)
-    if not eval_text:
+def get_random_eval_text():
+    df = pd.read_excel(EVAL_TEXTS_XLSX)
+    if df.empty:
         raise HTTPException(
             status_code=500, detail="No texts available for evaluation."
         )
-    return eval_text.id, eval_text.text
+    row = df.sample(1).iloc[0]
+    return row["id"], row["text"]
 
 
-# Refactored log_eval_metric to use DB
-async def log_eval_metric_db(
-    db: AsyncSession,
-    eval_text_id,
-    original_text,
-    model_name,
-    audio_path,
-    corrected_text=None,
-    speaker=None,
-    length_scale=1.0,
-    autocorrect_used=False,
-    synthesis_duration=None,
-    audio_duration=None,
-    metadata=None,
-):
-    metric = await DatabaseOperations.create_eval_metric(
-        db=db,
-        eval_text_id=eval_text_id,
-        original_text=original_text,
-        model_name=model_name,
-        audio_path=audio_path,
-        corrected_text=corrected_text,
-        speaker=speaker,
-        length_scale=length_scale,
-        autocorrect_used=autocorrect_used,
-        synthesis_duration=synthesis_duration,
-        audio_duration=audio_duration,
-        metadata=metadata,
-    )
-    return metric
+def log_eval_metric(uuid, id, text, model_name, audio_path, mos_score=None):
+    columns = [
+        "uuid",
+        "id",
+        "text",
+        "model_name",
+        "audio_path",
+        "mos_score",
+        "timestamp",
+    ]
+    if os.path.exists(EVAL_METRICS_XLSX):
+        df = pd.read_excel(EVAL_METRICS_XLSX)
+    else:
+        df = pd.DataFrame(columns=columns)
+    entry = {
+        "uuid": uuid,
+        "id": id,
+        "text": text,
+        "model_name": model_name,
+        "audio_path": audio_path,
+        "mos_score": mos_score,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+    df.to_excel(EVAL_METRICS_XLSX, index=False)
 
 
 eval_router = APIRouter()
@@ -183,16 +177,10 @@ class EvalRateRequest(BaseModel):
     mos_score: int
 
 
+# Refactor /eval/synthesize endpoint to use Excel
 @eval_router.post("/eval/synthesize", response_model=EvalSynthesizeResponse)
-async def eval_synthesize(
-    request: EvalSynthesizeRequest, db: AsyncSession = Depends(get_db)
-):
-    eval_text = await DatabaseOperations.get_random_eval_text(db)
-    if not eval_text:
-        raise HTTPException(
-            status_code=500, detail="No texts available for evaluation."
-        )
-    id, text = eval_text.id, eval_text.text
+async def eval_synthesize(request: EvalSynthesizeRequest):
+    id, text = get_random_eval_text()
     eval_uuid = str(uuid_lib.uuid4())
     audio_filename = f"{request.model_name}_{eval_uuid}.wav"
     audio_path = os.path.join(STORAGE_DIR, audio_filename)
@@ -204,10 +192,8 @@ async def eval_synthesize(
     # Apply autocorrect if requested
     corrected_text = None
     text_to_synthesize = text
-    autocorrect_used = False
     if request.autocorrect:
         text_to_synthesize, was_corrected = apply_autocorrect_to_text(text)
-        autocorrect_used = was_corrected
         if was_corrected:
             corrected_text = text_to_synthesize
     synth_path = tts_service.synthesize_speech(
@@ -219,19 +205,8 @@ async def eval_synthesize(
     )
     if synth_path is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize speech")
-    # Log evaluation metric in DB
-    await log_eval_metric_db(
-        db=db,
-        eval_text_id=id,
-        original_text=text,
-        model_name=request.model_name,
-        audio_path=audio_path,
-        corrected_text=corrected_text,
-        speaker=request.speaker,
-        length_scale=request.length_scale or 1.0,
-        autocorrect_used=autocorrect_used,
-        # Optionally add synthesis_duration/audio_duration/metadata if available
-    )
+    # Log evaluation metric in Excel
+    log_eval_metric(eval_uuid, id, text, request.model_name, audio_path)
     return EvalSynthesizeResponse(
         uuid=eval_uuid,
         id=id,
@@ -241,13 +216,18 @@ async def eval_synthesize(
     )
 
 
+# Refactor /eval/rate endpoint to use Excel
 @eval_router.post("/eval/rate")
-async def eval_rate(request: EvalRateRequest, db: AsyncSession = Depends(get_db)):
-    metric = await DatabaseOperations.update_eval_metric_score(
-        db, uuid_lib.UUID(request.uuid), request.mos_score
-    )
-    if not metric:
+async def eval_rate(request: EvalRateRequest):
+    # Update the MOS score for the given uuid in the Excel file
+    if not os.path.exists(EVAL_METRICS_XLSX):
+        raise HTTPException(status_code=404, detail="No evaluation metrics found")
+    df = pd.read_excel(EVAL_METRICS_XLSX)
+    idx = df[df["uuid"] == request.uuid].index
+    if len(idx) == 0:
         raise HTTPException(status_code=404, detail="Evaluation metric not found")
+    df.loc[idx, "mos_score"] = request.mos_score
+    df.to_excel(EVAL_METRICS_XLSX, index=False)
     return {"success": True, "message": "MOS score updated"}
 
 
