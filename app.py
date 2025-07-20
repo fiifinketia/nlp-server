@@ -306,67 +306,114 @@ async def download_original_sample(file_path: str):
 async def submit_evaluation(submission: EvaluationSubmission):
     """Submit a complete evaluation with demographics and audio evaluations"""
     try:
-        # Create filename with timestamp
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        filename = f"evaluation_submission_{timestamp}_{uuid_lib.uuid4().hex[:8]}.xlsx"
-        filepath = os.path.join(STORAGE_DIR, filename)
+        # Use a single file for all submissions
+        db_filepath = os.path.join(STORAGE_DIR, "db.xlsx")
 
-        # Prepare data for Excel export
-        with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
-            # Demographics sheet
-            demographics_data = {
-                "Field": list(submission.demographics.dict().keys()),
-                "Value": list(submission.demographics.dict().values()),
-            }
-            demographics_df = pd.DataFrame(demographics_data)
-            demographics_df.to_excel(writer, sheet_name="Demographics", index=False)
+        # Check if file exists and load existing data
+        if os.path.exists(db_filepath):
+            with pd.ExcelFile(db_filepath) as xls:
+                existing_demographics = (
+                    pd.read_excel(xls, "Demographics")
+                    if "Demographics" in xls.sheet_names
+                    else pd.DataFrame()
+                )
+                existing_original = (
+                    pd.read_excel(xls, "Original_Evaluations")
+                    if "Original_Evaluations" in xls.sheet_names
+                    else pd.DataFrame()
+                )
+                existing_synthesized = (
+                    pd.read_excel(xls, "Synthesized_Evaluations")
+                    if "Synthesized_Evaluations" in xls.sheet_names
+                    else pd.DataFrame()
+                )
+        else:
+            existing_demographics = pd.DataFrame()
+            existing_original = pd.DataFrame()
+            existing_synthesized = pd.DataFrame()
 
-            # Original evaluations sheet
-            if submission.originalEvaluations:
-                original_df = pd.DataFrame(
-                    [eval.dict() for eval in submission.originalEvaluations]
-                )
-                original_df.to_excel(
-                    writer, sheet_name="Original_Evaluations", index=False
-                )
+        # Prepare new data
+        submission_id = str(uuid_lib.uuid4())
+        timestamp = datetime.utcnow().isoformat()
 
-            # Synthesized evaluations sheet
-            if submission.synthesizedEvaluations:
-                synthesized_df = pd.DataFrame(
-                    [eval.dict() for eval in submission.synthesizedEvaluations]
-                )
-                synthesized_df.to_excel(
-                    writer, sheet_name="Synthesized_Evaluations", index=False
-                )
+        # Add submission ID and timestamp to demographics
+        demographics_dict = submission.demographics.dict()
+        demographics_dict["submission_id"] = submission_id
+        demographics_dict["timestamp"] = timestamp
+        new_demographics = pd.DataFrame([demographics_dict])
 
-            # Summary sheet
+        # Add submission ID and timestamp to original evaluations
+        original_evaluations = []
+        for eval in submission.originalEvaluations:
+            eval_dict = eval.dict()
+            eval_dict["submission_id"] = submission_id
+            eval_dict["timestamp"] = timestamp
+            original_evaluations.append(eval_dict)
+        new_original = pd.DataFrame(original_evaluations)
+
+        # Add submission ID and timestamp to synthesized evaluations
+        synthesized_evaluations = []
+        for eval in submission.synthesizedEvaluations:
+            eval_dict = eval.dict()
+            eval_dict["submission_id"] = submission_id
+            eval_dict["timestamp"] = timestamp
+            synthesized_evaluations.append(eval_dict)
+        new_synthesized = pd.DataFrame(synthesized_evaluations)
+
+        # Combine existing and new data
+        combined_demographics = pd.concat(
+            [existing_demographics, new_demographics], ignore_index=True
+        )
+        combined_original = pd.concat(
+            [existing_original, new_original], ignore_index=True
+        )
+        combined_synthesized = pd.concat(
+            [existing_synthesized, new_synthesized], ignore_index=True
+        )
+
+        # Save to single Excel file
+        with pd.ExcelWriter(db_filepath, engine="openpyxl") as writer:
+            combined_demographics.to_excel(
+                writer, sheet_name="Demographics", index=False
+            )
+            combined_original.to_excel(
+                writer, sheet_name="Original_Evaluations", index=False
+            )
+            combined_synthesized.to_excel(
+                writer, sheet_name="Synthesized_Evaluations", index=False
+            )
+
+            # Summary sheet with statistics
             summary_data = {
                 "Metric": [
+                    "Total Submissions",
                     "Total Original Evaluations",
                     "Total Synthesized Evaluations",
-                    "Submission Timestamp",
+                    "Last Updated",
                     "File Path",
                 ],
                 "Value": [
-                    len(submission.originalEvaluations),
-                    len(submission.synthesizedEvaluations),
+                    len(combined_demographics),
+                    len(combined_original),
+                    len(combined_synthesized),
                     datetime.utcnow().isoformat(),
-                    filepath,
+                    db_filepath,
                 ],
             }
             summary_df = pd.DataFrame(summary_data)
             summary_df.to_excel(writer, sheet_name="Summary", index=False)
 
-        logger.info(f"Evaluation submission saved to {filepath}")
+        logger.info(f"Evaluation submission {submission_id} saved to {db_filepath}")
 
         return {
             "success": True,
             "message": "Evaluation submitted successfully",
-            "file_path": filepath,
-            "filename": filename,
-            "total_original": len(submission.originalEvaluations),
-            "total_synthesized": len(submission.synthesizedEvaluations),
-            "timestamp": datetime.utcnow().isoformat(),
+            "submission_id": submission_id,
+            "file_path": db_filepath,
+            "total_submissions": len(combined_demographics),
+            "total_original": len(combined_original),
+            "total_synthesized": len(combined_synthesized),
+            "timestamp": timestamp,
         }
 
     except Exception as e:
